@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-replayer
+  namespace: default
+  labels:
+    app: kafka-replayer
+spec:
+  # 단일 Pod 실행 (순차 처리 보장)
+  replicas: 1
+  strategy:
+    type: Recreate  # 체크포인트 일관성을 위해 롤링 업데이트 비활성화
+  selector:
+    matchLabels:
+      app: kafka-replayer
+  template:
+    metadata:
+      labels:
+        app: kafka-replayer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
+    spec:
+      # 비root 컨테이너 실행
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      containers:
+      - name: kafka-replayer
+        image: kafka-replayer:1.0.0  # 실제 레지스트리 경로로 변경 필요
+        imagePullPolicy: IfNotPresent
+
+        # 리소스 제한 (성능 분석 결과 기반)
+        resources:
+          requests:
+            memory: "4Gi"
+            cpu: "1000m"
+          limits:
+            memory: "20Gi"  # 대용량 청크 처리를 위한 여유
+            cpu: "4000m"
+
+        # 환경변수로 설정 오버라이드
+        env:
+        - name: HDFS_URI
+          value: "hdfs://external-hdfs-namenode:8020"
+        - name: HDFS_USER
+          value: "hadoop"
+        - name: HDFS_INPUT_PATH
+          value: "/replay/prepared/2021-01-02"
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka-service:9092"
+        - name: KAFKA_TOPIC
+          value: "events-replay"
+        - name: REPLAY_MODE
+          value: "TIME_SYNCED"  # TIME_SYNCED 또는 SEQUENTIAL
+        - name: REPLAY_SPEED
+          value: "1.0"  # 재생 속도 배수
+        - name: JAVA_OPTS
+          value: "-Xms4g -Xmx16g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/checkpoints"
+
+        # 커맨드 인수 (실제 실행 시 오버라이드)
+        args:
+        - "--mode"
+        - "$(REPLAY_MODE)"
+        - "--hdfs-uri"
+        - "$(HDFS_URI)"
+        - "--input-path"
+        - "$(HDFS_INPUT_PATH)"
+        - "--kafka-bootstrap"
+        - "$(KAFKA_BOOTSTRAP_SERVERS)"
+        - "--topic"
+        - "$(KAFKA_TOPIC)"
+        - "--speed"
+        - "$(REPLAY_SPEED)"
+
+        # 포트
+        ports:
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
+
+        # 헬스체크
+        livenessProbe:
+          httpGet:
+            path: /metrics
+            port: 9090
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /metrics
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        # 볼륨 마운트
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: checkpoint
+          mountPath: /app/checkpoints
+
+      # 볼륨 정의
+      volumes:
+      - name: config
+        configMap:
+          name: kafka-replayer-config
+      - name: checkpoint
+        persistentVolumeClaim:
+          claimName: kafka-replayer-checkpoint-pvc
+
+      # Pod 재시작 정책
+      restartPolicy: Always
+
+      # 종료 시 Grace Period (Kafka 플러시 시간 확보)
+      terminationGracePeriodSeconds: 60

@@ -1,0 +1,43 @@
+# Gradle
+.gradle/
+build/
+!build/libs/*.jar
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+
+# Documentation
+README.md
+*.md
+
+# Test data
+test-data/
+
+# Logs
+*.log
+logs/
+
+# Local config
+local.yaml
+*.local.yaml
+
+# Kubernetes
+k8s/
+*.yaml
+!src/**/*.yaml

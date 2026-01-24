@@ -1,0 +1,54 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Eclipse
+.classpath
+.project
+.settings/
+
+# VS Code
+.vscode/
+
+# Kotlin
+*.class
+*.log
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# Spark
+target/
+project/target/
+project/project/
+
+# SBT
+.bsp/
+.metals/
+.bloop/
+
+# Logs
+logs/
+*.log
+
+# Checkpoint
+*-checkpoint.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test data
+test-data/
