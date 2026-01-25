@@ -1,170 +1,179 @@
-# Kafka Time-Synced Replayer
+# Kafka Direct Replayer
 
-HDFS/Hive에 저장된 이벤트 데이터를 원본 시간 간격을 유지하며 Kafka로 리플레이하는 시스템입니다.
+Hive 테이블의 이벤트 데이터를 시간 간격을 유지하며 Kafka로 리플레이하는 Spark 애플리케이션입니다.
 
 ## 아키텍처
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    하이브리드 아키텍처                            │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  Phase 1: Spark (데이터 준비)                                   │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Hive Table ──▶ Spark SQL ──▶ 시간별 Parquet 청크       │   │
-│  │  (ORC)          (정렬)        hdfs:///replay/prepared/   │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                              │                                   │
-│                              ▼                                   │
-│  Phase 2: Kotlin (정밀 리플레이)                                │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Parquet 청크 ──▶ HashedWheelTimer ──▶ Kafka            │   │
-│  │  (시간순 정렬됨)   (ms 정밀도)                           │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                  Spark Direct Replay                         │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  Hive Table (ORC)                                           │
+│       ↓                                                      │
+│  Spark SQL (읽기 + 정렬)                                     │
+│       ↓                                                      │
+│  Batch Control (시간 간격 제어)                              │
+│       ↓                                                      │
+│  Kafka Producer (비동기 전송)                                │
+│       ↓                                                      │
+│  Kafka Topic                                                 │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
 ```
+
+### 특징
+
+- ✅ **단순함**: 단일 Spark 작업으로 완료
+- ✅ **빠름**: 중간 저장소(HDFS) 불필요, I/O 50% 감소
+- ✅ **비용 절감**: 스토리지 비용 50% 절감
+- ✅ **시간 간격 제어**: 대략적인 원본 시간 간격 유지 (초 단위)
+- ✅ **배속 조절**: 1x, 2x, 10x 등 자유롭게 조절 가능
+- ✅ **대용량 처리**: 30억 건 이상 데이터 처리 가능
 
 ## 프로젝트 구조
 
 ```
 kafka-replayer/
-├── spark-data-prep/           # Phase 1: Spark 데이터 준비
-│   ├── prepare_chunks.py      # PySpark 버전
-│   ├── build.sbt              # Scala 빌드 설정
-│   └── src/main/scala/
-│       └── PrepareChunks.scala
+├── spark-data-prep/              # Spark 애플리케이션
+│   ├── src/main/scala/
+│   │   └── com/example/replayer/
+│   │       └── DirectKafkaReplayer.scala
+│   ├── build.sbt
+│   └── README.md
 │
-├── kotlin-replayer/           # Phase 2: Kotlin 리플레이어
-│   ├── build.gradle.kts
-│   └── src/main/kotlin/
-│       ├── Main.kt
-│       ├── config/
-│       ├── reader/
-│       ├── scheduler/
-│       ├── producer/
-│       └── model/
+├── scripts/                      # 실행 스크립트
+│   ├── run-replay.sh
+│   └── replay.env.example
 │
-└── scripts/                   # 실행 스크립트
-    ├── run-spark-prep.sh
-    └── run-replayer.sh
+└── ARCHITECTURE_COMPARISON.md    # 아키텍처 비교 문서
 ```
 
 ## 요구사항
 
-### Spark 데이터 준비
 - Apache Spark 3.x
+- Scala 2.12
+- sbt 1.9+
 - Hive Metastore 접근 권한
-- HDFS 쓰기 권한
-
-### Kotlin 리플레이어
-- JDK 17+
-- Gradle 8.x
-- HDFS 읽기 권한
 - Kafka 클러스터 접근
 
 ## 빠른 시작
 
-### 1. Spark 데이터 준비
+### 1. 빌드
 
 ```bash
-# PySpark 버전
 cd spark-data-prep
+sbt assembly
+```
+
+빌드 결과: `target/scala-2.12/spark-data-prep-assembly-1.0.0.jar`
+
+### 2. 환경 설정
+
+```bash
+cd scripts
+cp replay.env.example replay.env
+vi replay.env  # 환경에 맞게 수정
+```
+
+### 3. 실행
+
+#### 방법 1: 환경변수 사용
+
+```bash
+source replay.env
+./run-replay.sh
+```
+
+#### 방법 2: 직접 실행
+
+```bash
 spark-submit \
   --master yarn \
   --deploy-mode cluster \
   --num-executors 20 \
   --executor-memory 8g \
   --executor-cores 4 \
-  prepare_chunks.py \
+  --class com.example.replayer.DirectKafkaReplayer \
+  spark-data-prep/target/scala-2.12/spark-data-prep-assembly-1.0.0.jar \
   --source-table mydb.events \
   --target-date 2021-01-02 \
-  --output-path hdfs:///replay/prepared/2021-01-02
+  --kafka-bootstrap kafka-service:9092 \
+  --topic events-replay \
+  --speed 1.0
+```
 
-# 또는 Scala 버전
-sbt assembly
+## 사용법
+
+### 리플레이 모드
+
+#### 1. 시간 간격 제어 모드 (기본)
+
+원본 이벤트 간의 시간 간격을 대략적으로 유지하며 리플레이합니다.
+
+```bash
 spark-submit \
-  --master yarn \
-  --deploy-mode cluster \
-  --class com.example.replayer.PrepareChunks \
+  --class com.example.replayer.DirectKafkaReplayer \
   target/scala-2.12/spark-data-prep-assembly-1.0.0.jar \
   --source-table mydb.events \
   --target-date 2021-01-02 \
-  --output-path hdfs:///replay/prepared/2021-01-02
-```
-
-### 2. Kotlin 리플레이어 빌드
-
-```bash
-cd kotlin-replayer
-./gradlew shadowJar
-```
-
-### 3. 리플레이 실행
-
-```bash
-# 시간 동기화 모드 (원본 시간 간격 유지)
-java -jar build/libs/kafka-replayer-1.0.0-all.jar \
-  --mode time-synced \
-  --hdfs-uri hdfs://namenode:8020 \
-  --input-path /replay/prepared/2021-01-02 \
   --kafka-bootstrap kafka:9092 \
   --topic events-replay \
-  --speed 1.0
-
-# 순차 모드 (최대 속도)
-java -jar build/libs/kafka-replayer-1.0.0-all.jar \
-  --mode sequential \
-  --hdfs-uri hdfs://namenode:8020 \
-  --input-path /replay/prepared/2021-01-02 \
-  --kafka-bootstrap kafka:9092 \
-  --topic events-replay
+  --speed 1.0              # 1.0 = 실시간, 2.0 = 2배속, 10.0 = 10배속
+  --batch-size 10000       # 배치 크기 (시간 제어 단위)
 ```
 
-## 리플레이 모드
+**타이밍 정밀도**: 초 단위 (±수백ms)
 
-### 1. 시간 동기화 모드 (time-synced)
+#### 2. 최대 속도 모드
 
-원본 이벤트의 시간 간격을 유지하며 리플레이합니다.
+시간 간격을 무시하고 최대 속도로 전송합니다.
 
-- `--speed 1.0`: 원본 속도 (24시간 데이터 = 24시간 소요)
-- `--speed 2.0`: 2배속 (24시간 데이터 = 12시간 소요)
-- `--speed 0.5`: 0.5배속 (24시간 데이터 = 48시간 소요)
+```bash
+spark-submit \
+  --class com.example.replayer.DirectKafkaReplayer \
+  target/scala-2.12/spark-data-prep-assembly-1.0.0.jar \
+  --source-table mydb.events \
+  --target-date 2021-01-02 \
+  --kafka-bootstrap kafka:9092 \
+  --topic events-replay \
+  --max-speed
+```
 
-**타이밍 정밀도**: ~1-5ms (HashedWheelTimer 사용)
+### 커맨드 라인 옵션
 
-### 2. 순차 모드 (sequential)
+| 옵션 | 필수 | 설명 | 기본값 |
+|------|------|------|--------|
+| `--source-table` | O | Hive 테이블명 (예: mydb.events) | - |
+| `--target-date` | O | 대상 날짜 (YYYY-MM-DD) | - |
+| `--kafka-bootstrap` | O | Kafka 브로커 주소 | - |
+| `--topic` | O | Kafka 토픽명 | - |
+| `--speed` | X | 재생 속도 배수 | 1.0 |
+| `--batch-size` | X | 배치 크기 (이벤트 수) | 10000 |
+| `--max-speed` | X | 최대 속도 모드 플래그 | false |
 
-시간 간격을 무시하고 최대 속도로 순서대로 적재합니다.
+## 환경변수 설정
 
-- `--delay-ms 0`: 지연 없이 최대 속도
-- `--delay-ms 10`: 이벤트 간 10ms 지연
+`scripts/replay.env` 파일을 통해 설정:
 
-## 설정 파일
+```bash
+# 데이터 소스
+export SOURCE_TABLE="mydb.events"
+export TARGET_DATE="2021-01-02"
 
-`kotlin-replayer/src/main/resources/application.yaml`:
+# Kafka
+export KAFKA_BOOTSTRAP="kafka-service:9092"
+export KAFKA_TOPIC="events-replay"
 
-```yaml
-hdfs:
-  uri: "hdfs://namenode:8020"
-  user: "hadoop"
+# 리플레이 설정
+export SPEED="2.0"           # 2배속
+export BATCH_SIZE="10000"
+export MAX_SPEED="false"
 
-kafka:
-  bootstrap-servers: "kafka1:9092,kafka2:9092,kafka3:9092"
-  topic: "events-replay"
-  acks: "all"
-  batch-size: 65536
-  linger-ms: 5
-  buffer-memory: 134217728
-
-replay:
-  mode: "time-synced"  # time-synced | sequential
-  speed-factor: 1.0
-  chunk-hours: 1
-  
-metrics:
-  enabled: true
-  port: 9090
+# Spark 리소스
+export NUM_EXECUTORS="20"
+export EXECUTOR_MEMORY="8g"
+export EXECUTOR_CORES="4"
 ```
 
 ## 대용량 처리 (30억 건)
@@ -173,65 +182,172 @@ metrics:
 
 | 구성 요소 | 최소 사양 | 권장 사양 |
 |----------|----------|----------|
-| Spark 데이터 준비 | 10 executors × 4GB | 20 executors × 8GB |
-| Kotlin 리플레이어 | 16GB RAM, 4 cores | 32GB RAM, 8 cores |
+| Executors | 10 × 4GB | 20 × 8GB |
+| Driver | 2GB | 4GB |
+| 총 메모리 | ~40GB | ~160GB |
 
-### 청크 처리
+### 예상 처리 시간 (30억 건 기준)
 
-30억 건을 1시간 단위 청크로 분할하여 처리:
-- 청크당 약 1.25억 건
-- 메모리 효율적 처리
-- 청크 간 연속성 보장
+| 모드 | 처리 시간 |
+|------|----------|
+| 1x 속도 (실시간) | ~25시간 |
+| 2x 속도 | ~12.5시간 |
+| 10x 속도 | ~3시간 |
+| 최대 속도 | ~1.5시간 |
+
+*실제 시간은 클러스터 성능과 네트워크 대역폭에 따라 달라집니다.*
+
+## Kubernetes 환경 실행
+
+### Spark Operator 사용
+
+```bash
+kubectl apply -f k8s/spark-replayer-job.yaml
+```
+
+`k8s/spark-replayer-job.yaml` 예시:
+
+```yaml
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: kafka-replayer-20210102
+  namespace: default
+spec:
+  type: Scala
+  mode: cluster
+  image: your-registry/spark:3.5.0
+  mainClass: com.example.replayer.DirectKafkaReplayer
+  mainApplicationFile: "local:///opt/spark/jars/spark-data-prep-assembly-1.0.0.jar"
+  arguments:
+    - "--source-table"
+    - "mydb.events"
+    - "--target-date"
+    - "2021-01-02"
+    - "--kafka-bootstrap"
+    - "kafka-service:9092"
+    - "--topic"
+    - "events-replay"
+    - "--speed"
+    - "2.0"
+  sparkVersion: "3.5.0"
+  driver:
+    cores: 2
+    memory: "4g"
+  executor:
+    cores: 4
+    instances: 20
+    memory: "8g"
+```
+
+자세한 내용은 [spark-data-prep/README.md](spark-data-prep/README.md)를 참조하세요.
 
 ## 모니터링
 
-### Prometheus 메트릭 (포트 9090)
-
-- `replayer_events_sent_total`: 전송된 이벤트 수
-- `replayer_events_failed_total`: 실패한 이벤트 수
-- `replayer_current_chunk`: 현재 처리 중인 청크
-- `replayer_timing_drift_ms`: 타이밍 오차 (ms)
-
-### 로그
+### Spark UI
 
 ```bash
-# 상세 로그 활성화
-java -jar kafka-replayer-1.0.0-all.jar \
-  -Dlog.level=DEBUG \
-  ...
+# Local mode
+http://localhost:4040
+
+# YARN
+yarn application -list
+# Spark UI 주소 확인 후 접속
 ```
 
-## 장애 복구
-
-### 체크포인트
-
-리플레이어는 청크 단위로 체크포인트를 저장합니다:
+### 로그 확인
 
 ```bash
-# 체크포인트에서 재시작
-java -jar kafka-replayer-1.0.0-all.jar \
-  --resume \
-  --checkpoint-path /tmp/replayer-checkpoint.json \
-  ...
+# YARN 로그
+yarn logs -applicationId application_xxx
+
+# Kubernetes 로그
+kubectl logs spark-replayer-driver
 ```
 
-## 테스트
+## 성능 튜닝
 
-### 단위 테스트
+### 1. 배치 크기 조정
 
 ```bash
-cd kotlin-replayer
-./gradlew test
+--batch-size 50000  # 더 큰 배치 = 빠른 처리, 낮은 타이밍 정밀도
+--batch-size 1000   # 작은 배치 = 느린 처리, 높은 타이밍 정밀도
 ```
 
-### 통합 테스트 (Docker)
+### 2. Executor 수 증가
 
 ```bash
-cd kotlin-replayer
-docker-compose -f docker-compose.test.yaml up -d
-./gradlew integrationTest
+--num-executors 50 \
+--executor-memory 16g \
+--executor-cores 8
 ```
+
+### 3. Kafka Producer 튜닝
+
+```bash
+--conf spark.kafka.producer.batch.size=65536 \
+--conf spark.kafka.producer.linger.ms=5 \
+--conf spark.kafka.producer.compression.type=snappy \
+--conf spark.kafka.producer.acks=1  # 성능 우선 시
+```
+
+### 4. Spark 설정 최적화
+
+```bash
+--conf spark.sql.adaptive.enabled=true \
+--conf spark.sql.adaptive.coalescePartitions.enabled=true \
+--conf spark.sql.shuffle.partitions=200
+```
+
+## 트러블슈팅
+
+### OOM (Out of Memory)
+
+```bash
+# Executor 메모리 증가
+--executor-memory 16g
+
+# Batch size 감소
+--batch-size 5000
+```
+
+### Kafka 연결 실패
+
+```bash
+# 네트워크 확인
+telnet kafka-service 9092
+
+# DNS 확인
+nslookup kafka-service
+```
+
+### Hive 테이블 읽기 실패
+
+```bash
+# Metastore 연결 확인
+spark-shell --conf spark.sql.catalogImplementation=hive
+
+# 테이블 존재 확인
+spark.sql("SHOW TABLES").show()
+spark.sql("SELECT COUNT(*) FROM mydb.events WHERE dt='2021-01-02'").show()
+```
+
+## 비교: 기존 2-Phase vs Direct
+
+자세한 아키텍처 비교는 [ARCHITECTURE_COMPARISON.md](ARCHITECTURE_COMPARISON.md)를 참조하세요.
+
+| 항목 | Direct (현재) | 2-Phase (이전) |
+|------|---------------|----------------|
+| 복잡도 | 단순 | 복잡 |
+| 처리 시간 | 빠름 | 느림 |
+| 스토리지 | 50% 절감 | 2배 필요 |
+| 타이밍 정밀도 | 초 단위 | ms 단위 |
+| 재사용성 | 불가 | 가능 |
 
 ## 라이선스
 
 MIT License
+
+## 기여
+
+이슈 및 Pull Request를 환영합니다!
