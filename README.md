@@ -140,7 +140,84 @@ spark-submit \
   --max-speed
 ```
 
+## Serialization Formats
+
+Kafka Replayer는 다양한 직렬화 포맷을 지원하며 Apicurio Schema Registry와 통합됩니다.
+
+### Binary (기본 - 하위 호환성)
+
+기존 방식으로 `payload` 컬럼을 단순 binary로 변환합니다.
+
+```bash
+spark-submit \
+  --class com.example.replayer.DirectKafkaReplayer \
+  target/scala-2.12/spark-data-prep-assembly-1.0.0.jar \
+  --source-table mydb.events \
+  --target-date 2021-01-02 \
+  --kafka-bootstrap kafka:9092 \
+  --topic events-replay \
+  --serialization-format binary \
+  --max-speed
+```
+
+**요구사항**: Hive 테이블에 `payload` 컬럼 필수
+
+### Avro (새로운 기능)
+
+전체 row를 Avro 포맷으로 직렬화하고 Schema Registry에 스키마를 등록합니다.
+
+```bash
+spark-submit \
+  --class com.example.replayer.DirectKafkaReplayer \
+  target/scala-2.12/spark-data-prep-assembly-1.0.0.jar \
+  --source-table mydb.events \
+  --target-date 2021-01-02 \
+  --kafka-bootstrap kafka:9092 \
+  --topic events-replay \
+  --serialization-format avro \
+  --schema-registry-url http://apicurio:8080/apis/registry/v2 \
+  --max-speed
+```
+
+**특징**:
+- 전체 row를 하나의 Avro 메시지로 직렬화
+- Schema Registry에 자동으로 스키마 등록
+- 타입 안전성과 스키마 진화 지원
+
+### 고급 옵션
+
+```bash
+# 커스텀 스키마 이름 지정
+--schema-name my.custom.schema
+
+# 특정 컬럼을 key로 사용
+--key-column event_id
+
+# value에서 제외할 컬럼 지정
+--exclude-columns dt,partition,internal_field
+```
+
+### 타입 매핑 (Spark → Avro)
+
+| Spark 타입 | Avro 타입 |
+|-----------|-----------|
+| StringType | string |
+| LongType | long |
+| IntegerType | int |
+| DoubleType | double |
+| BooleanType | boolean |
+| TimestampType | long (milliseconds) |
+| Other types | string (fallback) |
+
+### 스키마 네이밍 규칙
+
+기본 스키마 이름: `<table_name>.value`
+
+예시: `mydb.events` → 스키마 이름: `events.value`
+
 ### 커맨드 라인 옵션
+
+#### 기본 옵션
 
 | 옵션 | 필수 | 설명 | 기본값 |
 |------|------|------|--------|
@@ -151,6 +228,16 @@ spark-submit \
 | `--speed` | X | 재생 속도 배수 | 1.0 |
 | `--batch-size` | X | 배치 크기 (이벤트 수) | 10000 |
 | `--max-speed` | X | 최대 속도 모드 플래그 | false |
+
+#### Serialization 옵션
+
+| 옵션 | 필수 | 설명 | 기본값 |
+|------|------|------|--------|
+| `--serialization-format` | X | 직렬화 포맷: binary, avro | binary |
+| `--schema-registry-url` | Avro 사용시 O | Apicurio Schema Registry URL | - |
+| `--schema-name` | X | 스키마 이름 (기본: <table>.value) | - |
+| `--key-column` | X | Kafka key로 사용할 컬럼 | event_key |
+| `--exclude-columns` | X | value에서 제외할 컬럼 (쉼표 구분) | dt |
 
 ## 환경변수 설정
 
@@ -241,6 +328,48 @@ spec:
 ```
 
 자세한 내용은 [spark-data-prep/README.md](spark-data-prep/README.md)를 참조하세요.
+
+## 테스트
+
+### 로컬 테스트 (Docker Compose)
+
+Docker를 사용하여 빠르게 로컬에서 테스트할 수 있습니다.
+
+```bash
+# 테스트 환경 시작
+cd docker
+./test-local.sh start
+
+# 서비스 상태 확인
+./test-local.sh status
+
+# 테스트 완료 후 정리
+./test-local.sh stop
+```
+
+**포함된 서비스:**
+- Kafka (localhost:9092)
+- Apicurio Schema Registry (http://localhost:8080)
+- Kafka UI (http://localhost:8090)
+- PostgreSQL with test data (localhost:5432)
+
+### 통합 테스트 (Testcontainers)
+
+자동화된 통합 테스트 실행:
+
+```bash
+cd spark-data-prep
+
+# 모든 테스트 실행
+sbt test
+
+# 특정 테스트만 실행
+sbt "testOnly *IntegrationTest"
+```
+
+**요구사항:** Docker Desktop 실행 중
+
+상세한 테스트 가이드는 [TESTING.md](TESTING.md)를 참조하세요.
 
 ## 모니터링
 
