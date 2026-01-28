@@ -23,7 +23,7 @@ class BinarySerializationStrategy extends SerializationStrategy {
     }
   }
 
-  override def initialize(schema: StructType, schemaName: String): Unit = {
+  override def initialize(schemaName: String): Unit = {
     // No initialization needed for binary
   }
 }

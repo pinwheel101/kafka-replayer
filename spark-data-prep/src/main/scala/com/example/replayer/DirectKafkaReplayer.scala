@@ -148,14 +148,13 @@ object DirectKafkaReplayer {
       .filterNot(c => c == keyCol)
       .filterNot(c => includeEventTime && c == "event_time") // Exclude event_time from value if needed separately
 
-    // 4. Initialize serialization (register schema)
-    val valueSchema = rawDf.select(valueColumns.map(col): _*).schema
+    // 4. Initialize serialization (fetch schema from registry)
     val schemaName = SerializationFactory.deriveSchemaName(config)
-    strategy.initialize(valueSchema, schemaName)
+    strategy.initialize(schemaName)
 
     // 5. Serialize value columns
-    val dfForValue = rawDf.select(valueColumns.map(col): _*)
-    val serializedDf = strategy.prepareForKafka(dfForValue, valueSchema, schemaName)
+    val dfForValue = rawDf.select(valueColumns.map(col).toIndexedSeq: _*)
+    val serializedDf = strategy.prepareForKafka(dfForValue, dfForValue.schema, schemaName)
 
     // 6. Add key column and optionally event_time
     val dfWithKey = if (includeEventTime && rawDf.columns.contains("event_time")) {

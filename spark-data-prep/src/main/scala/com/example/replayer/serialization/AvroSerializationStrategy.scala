@@ -5,42 +5,37 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.avro.functions.to_avro
 import org.apache.spark.sql.functions._
 import org.apache.avro.Schema
-import org.apache.avro.SchemaBuilder
-import io.apicurio.registry.rest.client.RegistryClientFactory
-import io.apicurio.registry.types.ArtifactType
-import java.io.ByteArrayInputStream
-import java.nio.charset.StandardCharsets
-import scala.util.{Try, Success, Failure}
+import io.apicurio.registry.rest.client.RegistryClient
+import io.kiota.http.vertx.VertXRequestAdapter
+import io.vertx.core.Vertx
+import scala.io.Source
 
 /**
- * Avro serialization with Apicurio Schema Registry
+ * Avro serialization using schema fetched from Apicurio Schema Registry 3.x
  */
 class AvroSerializationStrategy(registryUrl: String) extends SerializationStrategy {
 
-  private val registryClient = RegistryClientFactory.create(registryUrl)
+  private val vertx = Vertx.vertx()
+  private val requestAdapter = {
+    val adapter = new VertXRequestAdapter(vertx)
+    adapter.setBaseUrl(s"$registryUrl/apis/registry/v3")
+    adapter
+  }
+  private val registryClient = new RegistryClient(requestAdapter)
   private var avroSchema: Option[Schema] = None
 
-  override def initialize(schema: StructType, schemaName: String): Unit = {
-    // Generate Avro schema from Spark schema
-    val avroSchemaObj = convertSparkSchemaToAvro(schema, schemaName)
-    avroSchema = Some(avroSchemaObj)
+  override def initialize(schemaName: String): Unit = {
+    val inputStream = registryClient
+      .groups().byGroupId("default")
+      .artifacts().byArtifactId(schemaName)
+      .versions().byVersionExpression("latest")
+      .content().get()
 
-    // Register schema with Apicurio
-    Try {
-      val schemaContent = new ByteArrayInputStream(avroSchemaObj.toString.getBytes(StandardCharsets.UTF_8))
-      val metadata = registryClient.createArtifact(
-        "default", // group
-        schemaName,
-        schemaContent
-      )
-      println(s"[Schema Registry] Registered Avro schema: $schemaName (version: ${metadata.getVersion})")
-    } match {
-      case Success(_) =>
-        // Schema registered successfully
-      case Failure(e) =>
-        println(s"[Schema Registry] Schema already exists or registration warning: ${e.getMessage}")
-        // Continue - schema might already be registered
-    }
+    val schemaJson = Source.fromInputStream(inputStream).mkString
+    inputStream.close()
+
+    avroSchema = Some(new Schema.Parser().parse(schemaJson))
+    println(s"[Schema Registry] Fetched Avro schema: $schemaName")
   }
 
   override def prepareForKafka(df: DataFrame, schema: StructType, schemaName: String): DataFrame = {
@@ -50,50 +45,12 @@ class AvroSerializationStrategy(registryUrl: String) extends SerializationStrate
       throw new IllegalStateException("Schema not initialized. Call initialize() first.")
     ).toString
 
-    // Convert entire row to struct, then to Avro
     df.select(
-      to_avro(struct(df.columns.map(col): _*), avroSchemaStr).as("value")
+      to_avro(struct(df.columns.map(col).toIndexedSeq: _*), avroSchemaStr).as("value")
     )
   }
 
-  private def convertSparkSchemaToAvro(sparkSchema: StructType, recordName: String): Schema = {
-    // Simple type mapping - assumes most fields are strings
-    val schemaBuilder = SchemaBuilder.record(recordName).namespace("com.example.replayer")
-    val fieldsBuilder = schemaBuilder.fields()
-
-    sparkSchema.fields.foreach { field =>
-      field.dataType.typeName match {
-        case "string" =>
-          if (field.nullable) fieldsBuilder.optionalString(field.name)
-          else fieldsBuilder.requiredString(field.name)
-        case "long" =>
-          if (field.nullable) fieldsBuilder.optionalLong(field.name)
-          else fieldsBuilder.requiredLong(field.name)
-        case "integer" =>
-          if (field.nullable) fieldsBuilder.optionalInt(field.name)
-          else fieldsBuilder.requiredInt(field.name)
-        case "double" =>
-          if (field.nullable) fieldsBuilder.optionalDouble(field.name)
-          else fieldsBuilder.requiredDouble(field.name)
-        case "boolean" =>
-          if (field.nullable) fieldsBuilder.optionalBoolean(field.name)
-          else fieldsBuilder.requiredBoolean(field.name)
-        case "timestamp" =>
-          // Timestamp as long (milliseconds)
-          if (field.nullable) fieldsBuilder.optionalLong(field.name)
-          else fieldsBuilder.requiredLong(field.name)
-        case other =>
-          // Default to string for complex types
-          println(s"[Schema] Converting unsupported type ${other} to string for field ${field.name}")
-          if (field.nullable) fieldsBuilder.optionalString(field.name)
-          else fieldsBuilder.requiredString(field.name)
-      }
-    }
-
-    fieldsBuilder.endRecord()
-  }
-
   override def cleanup(): Unit = {
-    // No cleanup needed - HTTP client auto-closes
+    vertx.close()
   }
 }

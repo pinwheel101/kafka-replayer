@@ -1,12 +1,12 @@
 name := "spark-data-prep"
 version := "1.0.0"
-scalaVersion := "2.12.18"
+scalaVersion := "2.13.16"
 
 // Spark 버전
-val sparkVersion = "3.5.0"
+val sparkVersion = "4.0.1"
 
 // Serialization 버전
-val apicurioVersion = "2.5.8.Final"
+val apicurioVersion = "3.1.6"
 val avroVersion = "1.11.3"
 
 libraryDependencies ++= Seq(
@@ -22,9 +22,9 @@ libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-avro" % sparkVersion % "provided",
   "org.apache.avro" % "avro" % avroVersion,
 
-  // Apicurio Schema Registry client
-  "io.apicurio" % "apicurio-registry-serdes-avro-serde" % apicurioVersion,
-  "io.apicurio" % "apicurio-registry-client" % apicurioVersion,
+  // Apicurio Schema Registry client (3.x)
+  "io.apicurio" % "apicurio-registry-avro-serde-kafka" % apicurioVersion,
+  "io.apicurio" % "apicurio-registry-java-sdk" % apicurioVersion,
 
   // 테스트
   "org.scalatest" %% "scalatest" % "3.2.17" % Test,

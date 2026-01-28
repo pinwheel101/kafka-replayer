@@ -9,7 +9,7 @@ NC='\033[0m' # No Color
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-JAR_PATH="$PROJECT_ROOT/spark-data-prep/target/scala-2.12/spark-data-prep-assembly-1.0.0.jar"
+JAR_PATH="$PROJECT_ROOT/spark-data-prep/target/scala-2.13/spark-data-prep-assembly-1.0.0.jar"
 
 echo -e "${GREEN}=== Kafka Replayer Local Test ===${NC}\n"
 

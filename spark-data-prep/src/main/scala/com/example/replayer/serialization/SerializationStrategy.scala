@@ -17,11 +17,10 @@ trait SerializationStrategy {
   def prepareForKafka(df: DataFrame, schema: StructType, schemaName: String): DataFrame
 
   /**
-   * Initialize resources (e.g., register schema with registry)
-   * @param schema Spark schema to register
+   * Initialize resources (e.g., fetch schema from registry)
    * @param schemaName Schema subject name
    */
-  def initialize(schema: StructType, schemaName: String): Unit
+  def initialize(schemaName: String): Unit
 
   /**
    * Cleanup resources
