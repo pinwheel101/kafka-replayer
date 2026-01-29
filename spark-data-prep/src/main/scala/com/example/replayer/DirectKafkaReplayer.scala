@@ -70,10 +70,10 @@ object DirectKafkaReplayer {
       opt[String]("serialization-format")
         .optional()
         .action((x, c) => c.copy(serializationFormat = x))
-        .text("Serialization format: binary (default), avro")
+        .text("Serialization format: binary (default), avro, protobuf")
         .validate(x =>
-          if (Seq("binary", "avro").contains(x.toLowerCase)) success
-          else failure("Format must be: binary or avro"))
+          if (Seq("binary", "avro", "protobuf").contains(x.toLowerCase)) success
+          else failure("Format must be: binary, avro, or protobuf"))
 
       opt[String]("schema-registry-url")
         .optional()

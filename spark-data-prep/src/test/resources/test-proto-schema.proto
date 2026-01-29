@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package com.example.test;
+
+option java_package = "com.example.test";
+option java_outer_classname = "TestEventProto";
+
+// Test event message for Protobuf integration tests
+message TestEvent {
+  string event_key = 1;
+  string user_id = 2;
+  string event_type = 3;
+}

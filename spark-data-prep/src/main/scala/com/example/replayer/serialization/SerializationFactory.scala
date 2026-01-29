@@ -19,9 +19,10 @@ object SerializationFactory {
         new AvroSerializationStrategy(registryUrl)
 
       case "protobuf" =>
-        throw new NotImplementedError(
-          "Protobuf serialization is not yet implemented. Use 'avro' or 'binary' format."
+        val registryUrl = config.schemaRegistryUrl.getOrElse(
+          throw new IllegalArgumentException("--schema-registry-url is required for Protobuf serialization")
         )
+        new ProtobufSerializationStrategy(registryUrl)
 
       case "json" =>
         throw new NotImplementedError(

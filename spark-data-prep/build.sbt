@@ -8,6 +8,7 @@ val sparkVersion = "4.0.1"
 // Serialization 버전
 val apicurioVersion = "3.1.6"
 val avroVersion = "1.11.3"
+val protobufVersion = "3.25.3"
 
 // Jackson 버전 (Spark 4.0.1과 호환)
 val jacksonVersion = "2.18.2"
@@ -30,6 +31,11 @@ libraryDependencies ++= Seq(
   // Avro support
   "org.apache.spark" %% "spark-avro" % sparkVersion % "provided",
   "org.apache.avro" % "avro" % avroVersion,
+
+  // Protobuf support
+  "org.apache.spark" %% "spark-protobuf" % sparkVersion % "provided",
+  "com.google.protobuf" % "protobuf-java" % protobufVersion,
+  "com.google.protobuf" % "protobuf-java-util" % protobufVersion,
 
   // Apicurio Schema Registry client (3.x)
   "io.apicurio" % "apicurio-registry-avro-serde-kafka" % apicurioVersion,
