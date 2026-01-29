@@ -25,8 +25,9 @@ object DirectKafkaReplayer {
     serializationFormat: String = "binary",
     schemaRegistryUrl: Option[String] = None,
     schemaName: Option[String] = None,
-    keyColumn: Option[String] = Some("event_key"),
-    excludeColumns: Seq[String] = Seq("dt")
+    keyColumn: Option[String] = None,  // Auto-detect if not specified
+    timestampColumn: Option[String] = None,  // Auto-detect if not specified
+    excludeColumns: Seq[String] = Seq("dt", "fab")  // Partition columns
   )
 
   def main(args: Array[String]): Unit = {
@@ -87,7 +88,12 @@ object DirectKafkaReplayer {
       opt[String]("key-column")
         .optional()
         .action((x, c) => c.copy(keyColumn = Some(x)))
-        .text("Column for Kafka key (default: event_key)")
+        .text("Column for Kafka key (auto-detect: lot_id, event_key, or first column)")
+
+      opt[String]("timestamp-column")
+        .optional()
+        .action((x, c) => c.copy(timestampColumn = Some(x)))
+        .text("Timestamp column for replay timing (auto-detect: ts, event_time, or first timestamp column)")
 
       opt[Seq[String]]("exclude-columns")
         .optional()
@@ -122,14 +128,53 @@ object DirectKafkaReplayer {
   }
 
   /**
+   * Auto-detect key column from DataFrame
+   * Priority: lot_id > event_key > first non-timestamp column
+   */
+  def detectKeyColumn(df: DataFrame): String = {
+    val columns = df.columns
+    if (columns.contains("lot_id")) "lot_id"
+    else if (columns.contains("event_key")) "event_key"
+    else if (columns.contains("eqp_id")) "eqp_id"
+    else columns.head
+  }
+
+  /**
+   * Auto-detect timestamp column from DataFrame
+   * Priority: ts > event_time > create_dtts > start_dtts > first timestamp column
+   */
+  def detectTimestampColumn(df: DataFrame): String = {
+    import org.apache.spark.sql.types._
+
+    val columns = df.columns
+    val schema = df.schema
+
+    // Check priority columns
+    if (columns.contains("ts")) return "ts"
+    if (columns.contains("event_time")) return "event_time"
+    if (columns.contains("create_dtts")) return "create_dtts"
+    if (columns.contains("start_dtts")) return "start_dtts"
+
+    // Find first timestamp column
+    schema.fields.find { field =>
+      field.dataType match {
+        case _: TimestampType | _: LongType => columns.contains(field.name)
+        case _ => false
+      }
+    }.map(_.name).getOrElse {
+      throw new IllegalArgumentException(s"No timestamp column found in table. Available columns: ${columns.mkString(", ")}")
+    }
+  }
+
+  /**
    * Prepare DataFrame for Kafka write with configurable serialization
-   * @param includeEventTime If true, includes event_time column for timing control
+   * @param includeTimestamp If true, includes timestamp column for timing control
    */
   def prepareDataFrame(
     spark: SparkSession,
     config: Config,
     strategy: SerializationStrategy,
-    includeEventTime: Boolean = false
+    includeTimestamp: Boolean = false
   ): DataFrame = {
     import spark.implicits._
 
@@ -137,42 +182,63 @@ object DirectKafkaReplayer {
     val rawDf = spark.table(config.sourceTable)
       .filter($"dt" === config.targetDate)
 
-    // 2. Validate key column exists
-    val keyCol = config.keyColumn.getOrElse("event_key")
+    // 2. Auto-detect or validate key column
+    val keyCol = config.keyColumn.getOrElse(detectKeyColumn(rawDf))
     require(rawDf.columns.contains(keyCol),
       s"Key column '$keyCol' not found. Available: ${rawDf.columns.mkString(", ")}")
 
-    // 3. Select value columns (exclude key and excluded columns)
+    println(s"[*] Using key column: $keyCol")
+
+    // 3. Auto-detect or validate timestamp column if needed
+    val timestampCol = if (includeTimestamp) {
+      val col = config.timestampColumn.getOrElse(detectTimestampColumn(rawDf))
+      require(rawDf.columns.contains(col),
+        s"Timestamp column '$col' not found. Available: ${rawDf.columns.mkString(", ")}")
+      println(s"[*] Using timestamp column: $col")
+      col
+    } else ""
+
+    // 4. Select value columns (exclude key, timestamp, and excluded columns)
     val valueColumns = rawDf.columns
       .filterNot(c => config.excludeColumns.contains(c))
       .filterNot(c => c == keyCol)
-      .filterNot(c => includeEventTime && c == "event_time") // Exclude event_time from value if needed separately
+      .filterNot(c => includeTimestamp && c == timestampCol) // Exclude timestamp from value if needed separately
 
-    // 4. Initialize serialization (fetch schema from registry)
+    // 5. Initialize serialization (fetch schema from registry)
     val schemaName = SerializationFactory.deriveSchemaName(config)
     strategy.initialize(schemaName)
 
-    // 5. Serialize value columns
+    // 6. Serialize value columns
     val dfForValue = rawDf.select(valueColumns.map(col).toIndexedSeq: _*)
     val serializedDf = strategy.prepareForKafka(dfForValue, dfForValue.schema, schemaName)
 
-    // 6. Add key column and optionally event_time
-    val dfWithKey = if (includeEventTime && rawDf.columns.contains("event_time")) {
+    // 7. Add key column and optionally timestamp
+    val dfWithKey = if (includeTimestamp) {
+      // Convert timestamp to milliseconds (handle both TimestampType and LongType)
+      val timestampExpr = rawDf.schema(timestampCol).dataType match {
+        case _: org.apache.spark.sql.types.TimestampType =>
+          (unix_timestamp(col(timestampCol)) * 1000).cast("long")
+        case _: org.apache.spark.sql.types.LongType =>
+          col(timestampCol)
+        case other =>
+          throw new IllegalArgumentException(s"Timestamp column '$timestampCol' has unsupported type: $other")
+      }
+
       rawDf.select(
         col(keyCol).cast("string").as("key"),
-        col("event_time").as("event_time_ms")
+        timestampExpr.as("event_time_ms")
       ).withColumn("row_id", monotonically_increasing_id())
     } else {
       rawDf.select(col(keyCol).cast("string").as("key"))
         .withColumn("row_id", monotonically_increasing_id())
     }
 
-    // 7. Combine key + value (using row_id to ensure correct join)
+    // 8. Combine key + value (using row_id to ensure correct join)
     val serializedDfWithId = serializedDf.withColumn("row_id", monotonically_increasing_id())
 
     val result = dfWithKey.join(serializedDfWithId, "row_id")
 
-    if (includeEventTime && rawDf.columns.contains("event_time")) {
+    if (includeTimestamp) {
       result.select($"key", $"value", $"event_time_ms")
     } else {
       result.select($"key", $"value")
@@ -193,8 +259,8 @@ object DirectKafkaReplayer {
     val strategy = SerializationFactory.createStrategy(config)
 
     try {
-      // 1. Prepare DataFrame with serialization (include event_time for timing control)
-      val df = prepareDataFrame(spark, config, strategy, includeEventTime = true)
+      // 1. Prepare DataFrame with serialization (include timestamp for timing control)
+      val df = prepareDataFrame(spark, config, strategy, includeTimestamp = true)
         .orderBy($"event_time_ms")
 
       val totalCount = df.count()
