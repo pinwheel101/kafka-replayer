@@ -9,7 +9,16 @@ val sparkVersion = "4.0.1"
 val apicurioVersion = "3.1.6"
 val avroVersion = "1.11.3"
 
+// Jackson 버전 (Spark 4.0.1과 호환)
+val jacksonVersion = "2.18.2"
+
 libraryDependencies ++= Seq(
+  // Jackson dependencies - 버전 명시로 충돌 방지
+  "com.fasterxml.jackson.core" % "jackson-core" % jacksonVersion,
+  "com.fasterxml.jackson.core" % "jackson-databind" % jacksonVersion,
+  "com.fasterxml.jackson.core" % "jackson-annotations" % jacksonVersion,
+  "com.fasterxml.jackson.module" %% "jackson-module-scala" % jacksonVersion,
+
   "org.apache.spark" %% "spark-core" % sparkVersion % "provided",
   "org.apache.spark" %% "spark-sql" % sparkVersion % "provided",
   "org.apache.spark" %% "spark-hive" % sparkVersion % "provided",
@@ -33,6 +42,14 @@ libraryDependencies ++= Seq(
   "org.testcontainers" % "postgresql" % "1.19.3" % Test,
   "com.dimafeng" %% "testcontainers-scala-scalatest" % "0.41.0" % Test,
   "com.dimafeng" %% "testcontainers-scala-kafka" % "0.41.0" % Test
+)
+
+// Jackson 버전 강제 적용
+dependencyOverrides ++= Seq(
+  "com.fasterxml.jackson.core" % "jackson-core" % jacksonVersion,
+  "com.fasterxml.jackson.core" % "jackson-databind" % jacksonVersion,
+  "com.fasterxml.jackson.core" % "jackson-annotations" % jacksonVersion,
+  "com.fasterxml.jackson.module" %% "jackson-module-scala" % jacksonVersion
 )
 
 // Assembly 설정

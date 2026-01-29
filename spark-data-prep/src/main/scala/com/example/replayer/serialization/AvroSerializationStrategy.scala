@@ -5,9 +5,7 @@ import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.avro.functions.to_avro
 import org.apache.spark.sql.functions._
 import org.apache.avro.Schema
-import io.apicurio.registry.rest.client.RegistryClient
-import io.kiota.http.vertx.VertXRequestAdapter
-import io.vertx.core.Vertx
+import java.net.{HttpURLConnection, URL}
 import scala.io.Source
 
 /**
@@ -15,27 +13,33 @@ import scala.io.Source
  */
 class AvroSerializationStrategy(registryUrl: String) extends SerializationStrategy {
 
-  private val vertx = Vertx.vertx()
-  private val requestAdapter = {
-    val adapter = new VertXRequestAdapter(vertx)
-    adapter.setBaseUrl(s"$registryUrl/apis/registry/v3")
-    adapter
-  }
-  private val registryClient = new RegistryClient(requestAdapter)
   private var avroSchema: Option[Schema] = None
 
   override def initialize(schemaName: String): Unit = {
-    val inputStream = registryClient
-      .groups().byGroupId("default")
-      .artifacts().byArtifactId(schemaName)
-      .versions().byVersionExpression("latest")
-      .content().get()
+    try {
+      // Use v2 API for compatibility
+      val url = new URL(s"$registryUrl/apis/registry/v2/groups/default/artifacts/$schemaName")
+      val conn = url.openConnection().asInstanceOf[HttpURLConnection]
+      conn.setRequestMethod("GET")
+      conn.setRequestProperty("Accept", "application/json")
 
-    val schemaJson = Source.fromInputStream(inputStream).mkString
-    inputStream.close()
+      val code = conn.getResponseCode
+      if (code == 200) {
+        val schemaJson = Source.fromInputStream(conn.getInputStream).mkString
+        conn.disconnect()
 
-    avroSchema = Some(new Schema.Parser().parse(schemaJson))
-    println(s"[Schema Registry] Fetched Avro schema: $schemaName")
+        avroSchema = Some(new Schema.Parser().parse(schemaJson))
+        println(s"[Schema Registry] Fetched Avro schema: $schemaName")
+      } else {
+        val errorMsg = if (code >= 400) Source.fromInputStream(conn.getErrorStream).mkString else ""
+        conn.disconnect()
+        throw new RuntimeException(s"Failed to fetch schema '$schemaName': HTTP $code - $errorMsg")
+      }
+    } catch {
+      case e: Exception =>
+        println(s"[Schema Registry] Failed to fetch schema '$schemaName': ${e.getClass.getName}: ${e.getMessage}")
+        throw e
+    }
   }
 
   override def prepareForKafka(df: DataFrame, schema: StructType, schemaName: String): DataFrame = {
@@ -51,6 +55,6 @@ class AvroSerializationStrategy(registryUrl: String) extends SerializationStrate
   }
 
   override def cleanup(): Unit = {
-    vertx.close()
+    // No cleanup needed for HTTP client
   }
 }

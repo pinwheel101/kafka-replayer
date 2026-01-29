@@ -27,7 +27,7 @@ class AvroApicurioIntegrationTest
   private val network = Network.newNetwork()
 
   private val kafka = KafkaContainer(
-    DockerImageName.parse("confluentinc/cp-kafka:8.0.3")
+    DockerImageName.parse("confluentinc/cp-kafka:7.6.0")
   )
 
   private val apicurio = GenericContainer(
@@ -96,19 +96,28 @@ class AvroApicurioIntegrationTest
   }
 
   private def registerTestSchema(): Unit = {
-    val url = new URL(s"$registryUrl/apis/registry/v3/groups/default/artifacts")
+    // Use v2 API which is still supported in Apicurio 3.x
+    val url = new URL(s"$registryUrl/apis/registry/v2/groups/default/artifacts")
     val conn = url.openConnection().asInstanceOf[HttpURLConnection]
     conn.setRequestMethod("POST")
     conn.setDoOutput(true)
     conn.setRequestProperty("Content-Type", "application/json")
-    conn.setRequestProperty("X-Registry-ArtifactID", "test-avro-schema")
+    conn.setRequestProperty("X-Registry-ArtifactId", "test-avro-schema")
     conn.setRequestProperty("X-Registry-ArtifactType", "AVRO")
+
+    // Send raw schema as body
     conn.getOutputStream.write(testSchema.getBytes)
     conn.getOutputStream.flush()
 
     val code = conn.getResponseCode
-    require(code == 201 || code == 409,
-      s"Failed to register test schema: HTTP $code - ${Source.fromInputStream(conn.getErrorStream).mkString}")
+    if (code == 200 || code == 409) {
+      println(s"[Test] Schema registered successfully: HTTP $code")
+    } else {
+      val errorMsg = if (code >= 400) Source.fromInputStream(conn.getErrorStream).mkString else ""
+      println(s"[Test] Failed to register schema: HTTP $code - $errorMsg")
+    }
+    require(code == 200 || code == 409,
+      s"Failed to register test schema: HTTP $code - ${if (code >= 400) Source.fromInputStream(conn.getErrorStream).mkString else ""}")
     conn.disconnect()
   }
 
