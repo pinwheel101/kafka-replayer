@@ -11,6 +11,8 @@ import org.testcontainers.utility.DockerImageName
 import com.example.replayer.serialization.AvroSerializationStrategy
 import java.net.{HttpURLConnection, URL}
 import scala.io.Source
+import com.example.replayer.pipeline.Transformer
+import com.example.replayer.config.Config
 
 /**
  * Avro + Apicurio Schema Registry 3.x integration test
@@ -127,32 +129,18 @@ class AvroApicurioIntegrationTest
     strategy.cleanup()
   }
 
-  it should "serialize DataFrame to Avro using registry schema" in {
+  it should "serialize DataFrame using Transformer and write to Kafka" in {
     val sparkSession = spark
     import sparkSession.implicits._
 
     val strategy = new AvroSerializationStrategy(registryUrl)
-    strategy.initialize("test-avro-schema")
-
-    val df = Seq(
-      ("key1", "user1", "click"),
-      ("key2", "user2", "view")
-    ).toDF("event_key", "user_id", "event_type")
-
-    val result = strategy.prepareForKafka(df, df.schema, "test-avro-schema")
-
-    result.columns should contain("value")
-    result.count() shouldEqual 2
-
-    strategy.cleanup()
-  }
-
-  it should "write Avro messages to Kafka and read them back" in {
-    val sparkSession = spark
-    import sparkSession.implicits._
-
-    val strategy = new AvroSerializationStrategy(registryUrl)
-    strategy.initialize("test-avro-schema")
+    val config = Config(
+        keyColumn = Some("event_key"),
+        schemaName = Some("test-avro-schema"),
+        schemaRegistryUrl = Some(registryUrl),
+        kafkaBootstrap = kafka.bootstrapServers,
+        kafkaTopic = "test-avro-topic-transformed"
+    )
 
     val df = Seq(
       ("key1", "user1", "click"),
@@ -160,20 +148,21 @@ class AvroApicurioIntegrationTest
       ("key3", "user3", "purchase")
     ).toDF("event_key", "user_id", "event_type")
 
-    val serialized = strategy.prepareForKafka(df, df.schema, "test-avro-schema")
+    // Use Transformer to process the dataframe
+    // This tests the full pipeline: Schema detection (mocked by config here) -> Serialization -> Formatting
+    val transformed = Transformer.transform(spark, df, config, strategy, includeTimestamp = false)
 
-    serialized
-      .withColumn("key", lit("test-key"))
+    transformed
       .write
       .format("kafka")
       .option("kafka.bootstrap.servers", kafka.bootstrapServers)
-      .option("topic", "test-avro-topic")
+      .option("topic", "test-avro-topic-transformed")
       .save()
 
     val consumed = spark.read
       .format("kafka")
       .option("kafka.bootstrap.servers", kafka.bootstrapServers)
-      .option("subscribe", "test-avro-topic")
+      .option("subscribe", "test-avro-topic-transformed")
       .option("startingOffsets", "earliest")
       .load()
 

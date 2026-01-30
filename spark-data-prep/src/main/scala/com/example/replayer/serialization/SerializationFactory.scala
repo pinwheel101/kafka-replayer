@@ -1,6 +1,6 @@
 package com.example.replayer.serialization
 
-import com.example.replayer.DirectKafkaReplayer.Config
+import com.example.replayer.config.Config
 
 /**
  * Factory to create appropriate serialization strategy based on configuration
@@ -22,14 +22,9 @@ object SerializationFactory {
         )
         new ProtobufSerializationStrategy(registryUrl)
 
-      case "json" =>
-        throw new NotImplementedError(
-          "JSON Schema serialization is not yet implemented. Use 'avro' or 'binary' format."
-        )
-
       case unknown =>
         throw new IllegalArgumentException(
-          s"Unknown serialization format: $unknown. Use one of: binary, avro"
+          s"Unknown serialization format: $unknown. Use one of: avro, protobuf"
         )
     }
   }

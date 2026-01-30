@@ -7,6 +7,7 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.BeforeAndAfterAll
 import org.testcontainers.utility.DockerImageName
 import com.example.replayer.serialization._
+import com.example.replayer.config.Config
 
 /**
  * Integration test for DirectKafkaReplayer using Testcontainers
@@ -47,7 +48,7 @@ class DirectKafkaReplayerIntegrationTest
   }
 
   it should "throw exception for avro without registry URL" in {
-    val config = DirectKafkaReplayer.Config(
+    val config = Config(
       sourceTable = "test.table",
       targetDate = "2024-01-01",
       kafkaBootstrap = "localhost:9092",
@@ -62,7 +63,7 @@ class DirectKafkaReplayerIntegrationTest
   }
 
   it should "derive schema name from table name" in {
-    val testConfig: DirectKafkaReplayer.Config = DirectKafkaReplayer.Config(
+    val testConfig: Config = Config(
       sourceTable = "mydb.events",
       targetDate = "2024-01-01",
       kafkaBootstrap = "localhost:9092",
@@ -74,7 +75,7 @@ class DirectKafkaReplayerIntegrationTest
   }
 
   it should "use custom schema name if provided" in {
-    val testConfig: DirectKafkaReplayer.Config = DirectKafkaReplayer.Config(
+    val testConfig: Config = Config(
       sourceTable = "mydb.events",
       targetDate = "2024-01-01",
       kafkaBootstrap = "localhost:9092",
