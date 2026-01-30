@@ -9,8 +9,6 @@ object SerializationFactory {
 
   def createStrategy(config: Config): SerializationStrategy = {
     config.serializationFormat.toLowerCase match {
-      case "binary" =>
-        new BinarySerializationStrategy()
 
       case "avro" =>
         val registryUrl = config.schemaRegistryUrl.getOrElse(

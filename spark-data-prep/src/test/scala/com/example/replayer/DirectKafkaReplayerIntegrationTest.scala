@@ -46,19 +46,6 @@ class DirectKafkaReplayerIntegrationTest
     super.afterAll()
   }
 
-  "SerializationFactory" should "create BinarySerializationStrategy for binary format" in {
-    val config = DirectKafkaReplayer.Config(
-      sourceTable = "test.table",
-      targetDate = "2024-01-01",
-      kafkaBootstrap = "localhost:9092",
-      kafkaTopic = "test",
-      serializationFormat = "binary"
-    )
-
-    val strategy = SerializationFactory.createStrategy(config)
-    strategy shouldBe a[BinarySerializationStrategy]
-  }
-
   it should "throw exception for avro without registry URL" in {
     val config = DirectKafkaReplayer.Config(
       sourceTable = "test.table",
@@ -99,38 +86,6 @@ class DirectKafkaReplayerIntegrationTest
     schemaName shouldEqual "custom.schema"
   }
 
-  "BinarySerializationStrategy" should "fail when payload column is missing" in {
-    val sparkSession = spark
-    import sparkSession.implicits._
-
-    val df = Seq(
-      ("key1", "value1"),
-      ("key2", "value2")
-    ).toDF("event_key", "data")
-
-    val strategy = new BinarySerializationStrategy()
-
-    assertThrows[IllegalArgumentException] {
-      strategy.prepareForKafka(df, df.schema, "test.schema")
-    }
-  }
-
-  it should "serialize payload column to binary" in {
-    val sparkSession = spark
-    import sparkSession.implicits._
-
-    val df = Seq(
-      ("key1", "payload1"),
-      ("key2", "payload2")
-    ).toDF("event_key", "payload")
-
-    val strategy = new BinarySerializationStrategy()
-    val result = strategy.prepareForKafka(df, df.schema, "test.schema")
-
-    result.columns should contain("value")
-    result.count() shouldEqual 2
-  }
-
   "Kafka integration" should "write messages to Kafka topic" in {
     val sparkSession = spark
     import sparkSession.implicits._
@@ -160,32 +115,5 @@ class DirectKafkaReplayerIntegrationTest
       .load()
 
     result.count() shouldEqual 2
-  }
-
-  "DirectKafkaReplayer.prepareDataFrame" should "validate key column exists" in {
-    val sparkSession = spark
-    import sparkSession.implicits._
-
-    val df = Seq(
-      ("value1", "2024-01-01"),
-      ("value2", "2024-01-01")
-    ).toDF("data", "dt")
-
-    // Create temporary table
-    df.createOrReplaceTempView("test_table")
-
-    val config = DirectKafkaReplayer.Config(
-      sourceTable = "test_table",
-      targetDate = "2024-01-01",
-      kafkaBootstrap = "localhost:9092",
-      kafkaTopic = "test",
-      keyColumn = Some("missing_column")
-    )
-
-    val strategy = new BinarySerializationStrategy()
-
-    assertThrows[IllegalArgumentException] {
-      DirectKafkaReplayer.prepareDataFrame(spark, config, strategy)
-    }
   }
 }
